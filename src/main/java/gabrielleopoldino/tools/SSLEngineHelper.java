@@ -18,7 +18,9 @@ import static javax.net.ssl.SSLEngineResult.HandshakeStatus.*;
 public class SSLEngineHelper {
 
     private SSLEngine sslEngine;
-    private SSLEngineInputStream applicationInputStream;
+    private PipedInputStream applicationInputStream;
+    private PipedOutputStream applicationInputStreamOutputPipe;
+
     private SSLEngineOutputStream applicationOutputStream;
 
     private DataInputStream packetInputStream;
@@ -74,12 +76,18 @@ public class SSLEngineHelper {
             handshakeLock.lock();
             hasHandshake.await();
             applicationOutputStream = new SSLEngineOutputStream(this);
-            applicationInputStream = new SSLEngineInputStream(this);
+            //applicationInputStream = new SSLEngineInputStream(this);
+
+            applicationInputStreamOutputPipe = new PipedOutputStream();
+            applicationInputStream = new PipedInputStream(applicationInputStreamOutputPipe);
+
             closed = false;
             handshakeLock.unlock();
             receiveData.start();
 
         } catch (InterruptedException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
@@ -154,11 +162,14 @@ public class SSLEngineHelper {
                     res = sslEngine.wrap(outAppData, outNetData);
                     switch (res.getStatus()) {
                         case OK:
-                            outNetData.flip();
+                            //outNetData.flip();
                             //System.out.println("Sending Segment: "+segment);
                             //System.out.println("Sending: "+ Utils.toHex(outNetData.array(),0, outNetData.remaining()));
                             sendPacketData();
                             //outputLock.unlock();
+                            outAppData.compact();
+                            outAppData.flip();
+                            break;
                         case BUFFER_OVERFLOW:
                             int appSize = sslEngine.getSession().getApplicationBufferSize();
                             if (appSize > outAppData.capacity()) {
@@ -187,8 +198,19 @@ public class SSLEngineHelper {
                 }
             }
         }
+        outAppData.clear();
 
     }
+
+    /*protected LinkedBlockingQueue<byte[]> appReceivedList = new LinkedBlockingQueue<>();
+    protected byte[] receiveAppData()
+    {
+        try {
+            return appReceivedList.take();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }*/
 
     private byte[] inputBuffer = new byte[65535];
 
@@ -227,11 +249,12 @@ public class SSLEngineHelper {
         else
         {
             try {
-                //outNetData.flip();
+                outNetData.flip();
                 packetOutputStream.write(outNetData.array(), outNetData.arrayOffset(), outNetData.limit());
                 packetOutputStream.flush();
                 System.out.println("Sending "+ outNetData.limit()+" bytes");
                 outNetData.clear();
+                //outNetData.flip();
 
             } catch (IOException e) {
                 e.printStackTrace();
@@ -283,8 +306,9 @@ public class SSLEngineHelper {
                             res = sslEngine.wrap(outAppData, outNetData);
                             switch (res.getStatus()) {
                                 case OK:
-                                    outNetData.flip();
+                                    //outNetData.flip();
                                     sendPacketData();
+                                    //outNetData.flip();
                                     break;
                                 case CLOSED:
                                     break;
@@ -324,9 +348,9 @@ public class SSLEngineHelper {
                 if (firstHandshake)
                 {
                     firstHandshake = false;
-                    inAppData.clear();
-                    inAppData.limit(0);
-                    outAppData.clear();
+                    //inAppData.clear();
+                    //inAppData.limit(0);
+                    //outAppData.clear();
                     synchronized (listeners)
                     {
                         for (SSLEngineHelperListener listener : listeners)
@@ -356,8 +380,11 @@ public class SSLEngineHelper {
             super("Receiver Data Thread");
         }
 
+        private DataOutputStream applicationInputPipe;
+
         @Override
         public void run() {
+            applicationInputPipe = new DataOutputStream(new BufferedOutputStream(applicationInputStreamOutputPipe));
             while(!isClosed()) {
                 SSLEngineResult.HandshakeStatus hs = sslEngine.getHandshakeStatus();
                 if (hs != FINISHED && hs != NOT_HANDSHAKING && !isClosed()) {
@@ -377,11 +404,18 @@ public class SSLEngineHelper {
                     //inNetData.clear();
                     receivePacketData();
                     inNetData.flip();
-                    //inAppData.clear();
+                    inAppData.clear();
+
+                    /*if (!inNetData.hasRemaining())
+                    {
+                        inNetData.flip();
+                        continue;
+                    }*/
 
                     SSLEngineResult res = null;
-                    while (res == null || res.getStatus() != SSLEngineResult.Status.OK || inNetData.hasRemaining()) {
+                    while (res == null || res.getStatus() != SSLEngineResult.Status.OK) {
                         res = sslEngine.unwrap(inNetData, inAppData);
+                        inNetData.compact();
                         bytesProduced += res.bytesProduced();
                         switch (res.getStatus()) {
                             case BUFFER_OVERFLOW:
@@ -391,9 +425,16 @@ public class SSLEngineHelper {
                                     buffer.put(inAppData);
                                     inAppData = buffer;
                                 }
+
+                                int netSize = sslEngine.getSession().getPacketBufferSize();
+                                if (netSize > inNetData.capacity()) {
+                                    ByteBuffer buffer = ByteBuffer.allocate(netSize);
+                                    buffer.put(inNetData);
+                                    inNetData = buffer;
+                                }
                                 break;
                             case BUFFER_UNDERFLOW:
-                                inNetData.compact();
+                                //inNetData.compact();
                                 receivePacketData();
                                 inNetData.flip();
                                 break;
@@ -407,11 +448,16 @@ public class SSLEngineHelper {
 
                     if (bytesProduced <= 0)
                         continue;
-
+                    System.out.println("Received thread read "+ bytesProduced+ " bytes");
+                    applicationInputPipe.write(inAppData.array(), inAppData.arrayOffset(), bytesProduced);
+                    applicationInputPipe.flush();
+                    //appReceivedList.put(receivedData);
                     //Segment segment = Segment.parse(inAppData.array(), inAppData.arrayOffset(), bytesProduced);
                     //System.out.println("Received: "+segment.toString());
                     //scheduleReceive(segment);
                 } catch (SSLException e) {
+                    e.printStackTrace();
+                } catch (IOException e) {
                     e.printStackTrace();
                 }
             }

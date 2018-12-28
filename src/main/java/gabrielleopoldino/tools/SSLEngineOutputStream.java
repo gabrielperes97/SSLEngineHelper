@@ -20,14 +20,11 @@ public class SSLEngineOutputStream extends OutputStream {
     }
 
     public void write(byte[] bytes, int off, int len){
-        System.out.println("writing "+len+ " bytes");
         this.sslEngineHelper.outAppData.put(bytes, off, len);
     }
 
     @Override
     public void flush() {
-        //super.flush();
-        System.out.println("flush");
         sslEngineHelper.sendAppData();
     }
 }

@@ -49,7 +49,7 @@ public class Client {
                 out.flush();
            /* if (msg.length() == 0)
                 break;*/
-                System.out.println(in.readLine());
+                System.out.println("lido: " + in.readLine());
             }
             System.out.println("Closing");
             //sslClient.close();
